@@ -1,0 +1,14 @@
+{
+  "name": "supstream-workspace",
+  "private": true,
+  "scripts": {
+    "ui:dev": "pnpm --dir ui dev",
+    "ui:build": "pnpm --dir ui build",
+    "dev": "pnpm ui:build && cargo run -p supstream-headless",
+    "tauri": "tauri",
+    "app:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

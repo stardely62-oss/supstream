@@ -1,0 +1,16 @@
+[package]
+name = "supstream-headless"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "supstream-headless"
+path = "src/main.rs"
+
+[dependencies]
+supstream-core.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
