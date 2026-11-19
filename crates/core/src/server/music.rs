@@ -81,10 +81,10 @@ pub async fn put_settings(
     cfg.max_duration_secs = cfg.max_duration_secs.clamp(30, 3600);
     cfg.mute_padding = cfg.mute_padding.clamp(0.0, 3.0);
     cfg.volume = cfg.volume.clamp(0.0, 1.0);
-    // Мат нельзя «пропустить» на уровне оскорблений: слюры не пропускаем автоматически.
-    if cfg.hate == music::track::Policy::Allow {
-        cfg.hate = music::track::Policy::Review;
-    }
+    // Оскорбления — только вырезать или отклонять; мат — пропустить/запикать/вырезать/отклонить.
+    cfg.hate = cfg.hate.for_hate();
+    cfg.profanity = cfg.profanity.for_profanity();
+    cfg.no_lyrics = cfg.no_lyrics.for_no_lyrics();
     // Награда меняется только через /music/reward — устаревшая форма в панели её не затрёт.
     cfg.reward_id = state.store.config().music.reward_id;
     let saved = cfg.clone();

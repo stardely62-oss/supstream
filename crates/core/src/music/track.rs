@@ -11,12 +11,40 @@ use super::filter::{Category, Hit, Rule};
 pub enum Policy {
     /// Пропустить как есть.
     Allow,
-    /// Заглушить проблемные места (нужен текст с таймкодами).
+    /// Вырезать проблемные места — тишина (нужен текст с таймкодами).
     Mute,
-    /// Отправить на ручную проверку стримеру.
+    /// Запикать проблемные места — звуковой сигнал вместо слова.
+    Bleep,
+    /// Отправить на ручную проверку стримеру (используется для треков без текста).
     Review,
     /// Отклонить трек.
     Reject,
+}
+
+impl Policy {
+    /// Оскорбления: только «вырезать» или «отклонять».
+    pub fn for_hate(self) -> Self {
+        match self {
+            Self::Mute | Self::Bleep => Self::Mute,
+            _ => Self::Reject,
+        }
+    }
+
+    /// Мат: пропускать, запикивать, вырезать или отклонять.
+    pub fn for_profanity(self) -> Self {
+        match self {
+            Self::Review => Self::Bleep,
+            other => other,
+        }
+    }
+
+    /// Нет текста: пропускать, на проверку или отклонять.
+    pub fn for_no_lyrics(self) -> Self {
+        match self {
+            Self::Mute | Self::Bleep => Self::Review,
+            other => other,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -90,7 +118,7 @@ impl Default for MusicConfig {
             max_duration_secs: 420,
             per_user_limit: 2,
             hate: Policy::Reject,
-            profanity: Policy::Mute,
+            profanity: Policy::Bleep,
             no_lyrics: Policy::Review,
             mute_padding: 0.7,
             chat_enabled: true,
@@ -192,6 +220,9 @@ pub struct Mute {
     /// Создано проверкой (а не стримером вручную).
     pub auto: bool,
     pub enabled: bool,
+    /// Запикать (сигнал) вместо тишины.
+    #[serde(default)]
+    pub bleep: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

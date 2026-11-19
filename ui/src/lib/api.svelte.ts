@@ -70,7 +70,7 @@ export type TrackStatus =
   | "played"
   | "skipped";
 
-export type Policy = "allow" | "mute" | "review" | "reject";
+export type Policy = "allow" | "mute" | "bleep" | "review" | "reject";
 export type Category = "hate" | "profanity";
 
 export interface Hit {
@@ -88,6 +88,7 @@ export interface Mute {
   category?: Category;
   auto: boolean;
   enabled: boolean;
+  bleep: boolean;
 }
 
 export interface Track {

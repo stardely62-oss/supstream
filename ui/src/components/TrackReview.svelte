@@ -83,6 +83,17 @@
               <span class="label" class:hate={m.category === "hate"}>{m.label}</span>
               {#if !m.auto}<span class="faint small">вручную</span>{/if}
             </label>
+            {#if m.category === "hate"}
+              <span class="style faint small" title="Запретки только вырезаются">🔇 тишина</span>
+            {:else}
+              <button
+                class="btn small ghost style"
+                title="Переключить: пик или тишина"
+                onclick={() => cmd({ action: "set_mute", mute_id: m.id, enabled: m.enabled, bleep: !m.bleep })}
+              >
+                {m.bleep ? "📢 пик" : "🔇 тишина"}
+              </button>
+            {/if}
           </li>
         {/each}
       </ul>
@@ -173,6 +184,15 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+  }
+  .mutes li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .style {
+    flex: none;
   }
   .mute {
     display: flex;

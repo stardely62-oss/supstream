@@ -12,6 +12,7 @@ interface Mute {
   start: number;
   end: number;
   enabled: boolean;
+  bleep: boolean;
 }
 
 interface Track {
@@ -51,12 +52,16 @@ audio.preload = "auto";
 
 let ctx: AudioContext | null = null;
 let gain: GainNode | null = null;
+/** «Пик» — тон 1 кГц, который звучит вместо запиканного слова. */
+let beepGain: GainNode | null = null;
+const BEEP_LEVEL = 0.18;
 
 let currentId: string | null = null;
 let mutes: Mute[] = [];
 let wantPlay = false;
 let panic = false;
 let mutedNow = false;
+let beepNow = false;
 
 function ensureAudioGraph() {
   if (ctx) return;
@@ -65,6 +70,13 @@ function ensureAudioGraph() {
     const src = ctx.createMediaElementSource(audio);
     gain = ctx.createGain();
     src.connect(gain).connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = 1000;
+    beepGain = ctx.createGain();
+    beepGain.gain.value = 0;
+    osc.connect(beepGain).connect(ctx.destination);
+    osc.start();
   } catch {
     ctx = null; // без Web Audio — глушим через audio.muted (грубее, но работает)
   }
@@ -141,15 +153,20 @@ function apply(view: MusicView) {
 /** Глушение: проверяем позицию каждые 20 мс и заранее (+40 мс) начинаем приглушать. */
 function updateMute(force = false) {
   const t = audio.currentTime;
-  const shouldMute = panic || mutes.some((m) => t + 0.04 >= m.start && t < m.end);
-  if (shouldMute === mutedNow && !force) return;
+  const active = mutes.filter((m) => t + 0.04 >= m.start && t < m.end);
+  const shouldMute = panic || active.length > 0;
+  // Пикаем, только если все активные отметки — «пик» и музыка реально играет.
+  const shouldBeep = !panic && active.length > 0 && active.every((m) => m.bleep) && !audio.paused;
+  if (shouldMute === mutedNow && shouldBeep === beepNow && !force) return;
   mutedNow = shouldMute;
+  beepNow = shouldBeep;
   if (ctx && gain) {
     // Паника — мгновенно; обычное глушение — плавно (~10 мс), чтобы не было щелчка.
     if (panic) gain.gain.setValueAtTime(0, ctx.currentTime);
     else gain.gain.setTargetAtTime(shouldMute ? 0 : 1, ctx.currentTime, 0.01);
+    beepGain?.gain.setTargetAtTime(shouldBeep ? BEEP_LEVEL * audio.volume : 0, ctx.currentTime, 0.005);
   } else {
-    audio.muted = shouldMute;
+    audio.muted = shouldMute; // без Web Audio пик недоступен — просто тишина
   }
 }
 
@@ -206,6 +223,9 @@ if (!token) {
   },
   get muted() {
     return mutedNow;
+  },
+  get beep() {
+    return beepGain?.gain.value ?? 0;
   },
   get current() {
     return currentId;

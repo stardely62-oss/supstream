@@ -19,7 +19,8 @@
 
   const POLICY: Record<Policy, string> = {
     allow: "пропускать",
-    mute: "глушить",
+    mute: "вырезать (тишина)",
+    bleep: "запикивать",
     review: "на мою проверку",
     reject: "отклонять",
   };
@@ -187,15 +188,15 @@
       <legend>Проверка текста</legend>
       <div class="grid">
         <label
-          >Оскорбления и слюры
+          >Запретки
           <select bind:value={s.hate}>
-            {#each ["mute", "review", "reject"] as p}<option value={p}>{POLICY[p as Policy]}</option>{/each}
+            {#each ["mute", "reject"] as p}<option value={p}>{POLICY[p as Policy]}</option>{/each}
           </select>
         </label>
         <label
           >Мат
           <select bind:value={s.profanity}>
-            {#each ["allow", "mute", "review", "reject"] as p}<option value={p}>{POLICY[p as Policy]}</option>{/each}
+            {#each ["allow", "bleep", "mute", "reject"] as p}<option value={p}>{POLICY[p as Policy]}</option>{/each}
           </select>
         </label>
         <label
@@ -210,8 +211,8 @@
         </label>
       </div>
       <p class="hint">
-        Оскорбления глушатся всегда, даже если трек одобрен вручную. Мат на Twitch разрешён, но с меткой контента —
-        решайте сами.
+        Запретки (оскорбления и слюры — за них банит Twitch) вырезаются всегда, даже если трек одобрен вручную. Мат на
+        Twitch разрешён, но с меткой контента — решайте сами.
       </p>
     </fieldset>
 
@@ -303,7 +304,7 @@
         <code>*слово*</code> — где угодно внутри слова.
       </p>
       <div class="grid three">
-        <label>Оскорбления<textarea class="input area mono" bind:value={hateWords}></textarea></label>
+        <label>Запретки<textarea class="input area mono" bind:value={hateWords}></textarea></label>
         <label>Мат<textarea class="input area mono" bind:value={matWords}></textarea></label>
         <label>Исключения (не нарушение)<textarea class="input area mono" bind:value={allowWords}></textarea></label>
       </div>

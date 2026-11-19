@@ -38,6 +38,13 @@ pub fn evaluate(
     filter: &Filter,
     cfg: &MusicConfig,
 ) -> Outcome {
+    // Старые настройки приводим к допустимым вариантам.
+    let cfg = &MusicConfig {
+        hate: cfg.hate.for_hate(),
+        profanity: cfg.profanity.for_profanity(),
+        no_lyrics: cfg.no_lyrics.for_no_lyrics(),
+        ..cfg.clone()
+    };
     let mut reasons = Vec::new();
     let mut status = Status::Ready;
 
@@ -51,7 +58,7 @@ pub fn evaluate(
                 reasons.push("Текст не найден — трек отклонён по настройке".into());
                 Status::Rejected
             }
-            Policy::Mute | Policy::Review => {
+            Policy::Mute | Policy::Bleep | Policy::Review => {
                 reasons.push("Текст не найден — проверьте трек вручную".into());
                 Status::NeedsReview
             }
@@ -113,9 +120,12 @@ pub fn evaluate(
                     label: h.word.clone(),
                     category: Some(h.category),
                     auto: true,
-                    // Оскорбления глушим всегда (даже если трек ушёл на проверку),
-                    // мат — только при политике «глушить» или «на проверку».
-                    enabled: h.category == Category::Hate || matches!(policy, Policy::Mute | Policy::Review),
+                    // Оскорбления вырезаем всегда (даже если трек одобрят вручную),
+                    // мат — по настройке. Отклонённый трек тоже получает отметки:
+                    // если стример его одобрит, они уже будут на месте.
+                    enabled: h.category == Category::Hate
+                        || matches!(policy, Policy::Mute | Policy::Bleep | Policy::Reject),
+                    bleep: h.category == Category::Profanity && policy != Policy::Mute,
                 });
             }
         }
@@ -136,10 +146,14 @@ pub fn evaluate(
                 Status::Ready
             }
             Policy::Mute if lyrics.synced => {
-                reasons.push(format!("{what}: {count} — заглушено автоматически"));
+                reasons.push(format!("{what}: {count} — вырезано автоматически"));
                 Status::Ready
             }
-            Policy::Mute => {
+            Policy::Bleep if lyrics.synced => {
+                reasons.push(format!("{what}: {count} — запикано автоматически"));
+                Status::Ready
+            }
+            Policy::Mute | Policy::Bleep => {
                 reasons.push(format!(
                     "{what}: {count}, но у текста нет таймкодов — заглушить нельзя, проверьте вручную"
                 ));
@@ -156,7 +170,7 @@ pub fn evaluate(
         };
         status = worst(status, s);
     };
-    apply(hate, cfg.hate, "Оскорбления");
+    apply(hate, cfg.hate, "Запретки");
     apply(profanity, cfg.profanity, "Мат");
 
     if hate == 0 && profanity == 0 && !lyrics.instrumental {
@@ -187,6 +201,8 @@ fn merge(mut mutes: Vec<Mute>) -> Vec<Mute> {
             && m.enabled == last.enabled
         {
             last.end = last.end.max(m.end);
+            // Если рядом и пик, и вырезание — вырезаем (строже).
+            last.bleep = last.bleep && m.bleep;
             if !last.label.split(", ").any(|w| w == m.label) {
                 last.label = format!("{}, {}", last.label, m.label);
             }
@@ -230,6 +246,31 @@ mod tests {
         let o = evaluate(Some(&l), Some(180.0), &filter(), &MusicConfig::default());
         assert_eq!(o.status, Status::Ready);
         assert!(o.mutes.is_empty());
+    }
+
+    #[test]
+    fn profanity_is_bleeped_by_default_and_muted_if_chosen() {
+        let l = lyrics(true, &[(10.0, "я иду домой, бля, опять"), (14.0, "дальше чисто")]);
+        let o = evaluate(Some(&l), Some(180.0), &filter(), &MusicConfig::default());
+        assert!(o.mutes[0].bleep, "мат по умолчанию запикивается");
+        let cfg = MusicConfig { profanity: Policy::Mute, ..Default::default() };
+        let o = evaluate(Some(&l), Some(180.0), &filter(), &cfg);
+        assert!(!o.mutes[0].bleep && o.mutes[0].enabled);
+        let cfg = MusicConfig { profanity: Policy::Reject, ..Default::default() };
+        assert_eq!(evaluate(Some(&l), Some(180.0), &filter(), &cfg).status, Status::Rejected);
+    }
+
+    #[test]
+    fn hate_is_cut_never_bleeped_and_old_settings_are_mapped() {
+        let l = lyrics(true, &[(3.0, "ты пидор, сука"), (6.0, "ok")]);
+        let cfg = MusicConfig { hate: Policy::Review, ..Default::default() };
+        let o = evaluate(Some(&l), Some(100.0), &filter(), &cfg);
+        assert_eq!(o.status, Status::Rejected, "старое «на проверку» для оскорблений → отклонять");
+        let cfg = MusicConfig { hate: Policy::Bleep, ..Default::default() };
+        let o = evaluate(Some(&l), Some(100.0), &filter(), &cfg);
+        assert_eq!(o.status, Status::Ready);
+        assert_eq!(o.mutes.len(), 1, "пик и вырезание рядом сливаются: {:?}", o.mutes);
+        assert!(!o.mutes[0].bleep, "оскорбления вырезаются, а не запикиваются");
     }
 
     #[test]

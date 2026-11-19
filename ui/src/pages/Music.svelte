@@ -173,6 +173,7 @@
               {#each now.mutes.filter((x) => x.enabled) as mt}
                 <div
                   class="mute-mark"
+                  class:bleep={mt.bleep}
                   style:left={`${(mt.start / progress.duration) * 100}%`}
                   style:width={`${((mt.end - mt.start) / progress.duration) * 100}%`}
                 ></div>
@@ -244,7 +245,7 @@
                   {VIA[t.requested_by.via]} {t.requested_by.name}
                   {#if t.meta?.duration} · {clock(t.meta.duration)}{/if}
                   {#if t.mutes.some((x) => x.enabled)} · 🔇 {t.mutes.filter((x) => x.enabled).length}{/if}
-                  {#if t.check?.hate} · <span class="error-text">оскорбления: {t.check.hate}</span>{/if}
+                  {#if t.check?.hate} · <span class="error-text">запретки: {t.check.hate}</span>{/if}
                 </span>
               </span>
               <span class="status {st.tone}">{st.text}</span>
@@ -404,6 +405,9 @@
     min-width: 2px;
     background: var(--bad);
     opacity: 0.75;
+  }
+  .mute-mark.bleep {
+    background: var(--warn);
   }
   .controls {
     display: flex;

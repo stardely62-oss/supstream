@@ -612,10 +612,12 @@ pub enum TrackCommand {
     Move {
         to: usize,
     },
-    /// Включить/выключить отметку глушения.
+    /// Включить/выключить отметку и выбрать пик или тишину.
     SetMute {
         mute_id: u32,
         enabled: bool,
+        #[serde(default)]
+        bleep: Option<bool>,
     },
     /// Добавить свою отметку (например, заглушить всю строку).
     AddMute {
@@ -692,10 +694,16 @@ pub fn track_command(state: &Arc<AppState>, id: &str, cmd: TrackCommand) -> Resu
                 inner.tracks.insert(idx, t);
             });
         }
-        TrackCommand::SetMute { mute_id, enabled } => {
+        TrackCommand::SetMute { mute_id, enabled, bleep } => {
             music.update_track(id, |t| {
                 if let Some(m) = t.mutes.iter_mut().find(|m| m.id == mute_id) {
                     m.enabled = enabled;
+                    // Оскорбления только вырезаем.
+                    if let Some(b) = bleep
+                        && m.category != Some(filter::Category::Hate)
+                    {
+                        m.bleep = b;
+                    }
                 }
             });
         }
@@ -713,6 +721,7 @@ pub fn track_command(state: &Arc<AppState>, id: &str, cmd: TrackCommand) -> Resu
                     category: None,
                     auto: false,
                     enabled: true,
+                    bleep: false,
                 });
                 t.mutes.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
             });
