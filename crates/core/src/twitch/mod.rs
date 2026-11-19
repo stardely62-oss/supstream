@@ -223,6 +223,21 @@ async fn poll_device_login(state: &Arc<AppState>, client_id: &str, code: auth::D
     }
 }
 
+/// Сообщение в чат своего канала от имени стримера.
+pub async fn send_chat(state: &Arc<AppState>, message: &str) -> Result<()> {
+    let Some(t) = state.store.secrets().twitch else {
+        bail!(NotConfigured("Войдите в Twitch".into()));
+    };
+    // Лимит Twitch — 500 символов.
+    let message: String = message.chars().take(490).collect();
+    let body = serde_json::json!({ "broadcaster_id": t.user_id, "sender_id": t.user_id, "message": message });
+    let resp = helix(state, reqwest::Method::POST, "/chat/messages", Some(body)).await?;
+    if !resp.status().is_success() {
+        bail!("Twitch не принял сообщение ({})", resp.status());
+    }
+    Ok(())
+}
+
 pub async fn logout(state: &Arc<AppState>) -> Result<()> {
     if let Some(task) = state.twitch.login_task.lock().unwrap().take() {
         task.abort();

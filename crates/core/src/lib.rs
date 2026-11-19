@@ -4,6 +4,7 @@ pub mod app;
 pub mod bus;
 pub mod donationalerts;
 pub mod events;
+pub mod music;
 pub mod server;
 pub mod store;
 pub mod twitch;

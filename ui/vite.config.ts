@@ -14,5 +14,16 @@ export default defineConfig({
       "/auth": core,
     },
   },
-  build: { target: "es2022", outDir: "dist", emptyOutDir: true },
+  build: {
+    target: "es2022",
+    outDir: "dist",
+    emptyOutDir: true,
+    // Панель и виджеты для OBS — отдельные страницы.
+    rollupOptions: {
+      input: {
+        panel: "index.html",
+        player: "widgets/player.html",
+      },
+    },
+  },
 });

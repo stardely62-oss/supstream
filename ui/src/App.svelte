@@ -5,13 +5,14 @@
   import Feed from "./pages/Feed.svelte";
   import Connections from "./pages/Connections.svelte";
   import Settings from "./pages/Settings.svelte";
+  import Music from "./pages/Music.svelte";
 
-  type Page = "feed" | "connections" | "settings";
+  type Page = "feed" | "connections" | "music" | "settings";
 
   const NAV: { id: Page | string; label: string; icon: string; soon?: boolean }[] = [
     { id: "feed", label: "Лента", icon: "⚡" },
     { id: "connections", label: "Подключения", icon: "🔌" },
-    { id: "music", label: "Музыка", icon: "🎵", soon: true },
+    { id: "music", label: "Музыка", icon: "🎵" },
     { id: "actions", label: "Действия", icon: "🧩", soon: true },
     { id: "alerts", label: "Алерты", icon: "🔔", soon: true },
     { id: "settings", label: "Настройки", icon: "⚙️" },
@@ -19,7 +20,7 @@
 
   function initialPage(): Page {
     const h = location.hash.slice(1);
-    return h === "connections" || h === "settings" ? h : "feed";
+    return h === "connections" || h === "settings" || h === "music" ? h : "feed";
   }
 
   let page = $state<Page>(initialPage());
@@ -96,6 +97,8 @@
         <Feed />
       {:else if page === "connections"}
         <Connections />
+      {:else if page === "music"}
+        <Music />
       {:else}
         <Settings />
       {/if}

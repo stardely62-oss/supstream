@@ -3,20 +3,47 @@
 //! Сервер → клиент:
 //! * `{ "kind": "hello", "version", "status", "events": [..] }` — сразу после подключения;
 //! * `{ "kind": "event", "event": {..} }`;
-//! * `{ "kind": "status", "status": {..} }`.
+//! * `{ "kind": "status", "status": {..} }`;
+//! * `{ "kind": "music", "music": {..} }` — очередь и плеер;
+//! * `{ "kind": "music_progress", "progress": {..} }` — позиция трека.
+//!
+//! `?client=player` — подключился виджет-плеер (панель показывает, что он есть).
 
 use std::sync::Arc;
 
-use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Query, State};
 use axum::response::Response;
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::app::{AppState, VERSION};
 
-pub async fn handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> Response {
-    ws.on_upgrade(move |socket| session(socket, state))
+#[derive(serde::Deserialize)]
+pub struct WsQuery {
+    client: Option<String>,
+}
+
+pub async fn handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<WsQuery>,
+) -> Response {
+    let is_player = q.client.as_deref() == Some("player");
+    ws.on_upgrade(move |socket| async move {
+        // Счётчик плееров уменьшится, даже если соединение оборвётся.
+        struct PlayerGuard(Arc<AppState>);
+        impl Drop for PlayerGuard {
+            fn drop(&mut self) {
+                self.0.music.player_connected(-1);
+            }
+        }
+        let _guard = is_player.then(|| {
+            state.music.player_connected(1);
+            PlayerGuard(state.clone())
+        });
+        session(socket, state).await
+    })
 }
 
 async fn send(socket: &mut WebSocket, value: serde_json::Value) -> bool {
@@ -27,11 +54,16 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
     // Подписываемся до отправки истории, чтобы не потерять события между ними.
     let mut events = state.bus.subscribe();
     let mut status = state.status.subscribe();
+    let mut music = state.music.subscribe();
+    let mut progress = state.music.subscribe_progress();
+    music.borrow_and_update();
+    progress.borrow_and_update();
     let hello = json!({
         "kind": "hello",
         "version": VERSION,
         "status": *status.borrow_and_update(),
         "events": state.bus.recent(100),
+        "music": state.music.view(),
     });
     if !send(&mut socket, hello).await {
         return;
@@ -49,6 +81,16 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
                 if changed.is_err() { return; }
                 let st = status.borrow_and_update().clone();
                 if !send(&mut socket, json!({ "kind": "status", "status": st })).await { return; }
+            },
+            changed = music.changed() => {
+                if changed.is_err() { return; }
+                music.borrow_and_update();
+                if !send(&mut socket, json!({ "kind": "music", "music": state.music.view() })).await { return; }
+            },
+            changed = progress.changed() => {
+                if changed.is_err() { return; }
+                let p = progress.borrow_and_update().clone();
+                if !send(&mut socket, json!({ "kind": "music_progress", "progress": p })).await { return; }
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,

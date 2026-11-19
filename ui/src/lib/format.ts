@@ -80,3 +80,10 @@ export async function copy(text: string) {
     ta.remove();
   }
 }
+
+/** 75.4 → «1:15». */
+export function clock(sec: number | undefined | null) {
+  if (sec === undefined || sec === null || !Number.isFinite(sec)) return "–:––";
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}

@@ -4,6 +4,7 @@
 //! или параметр `?token=<token>` (для WebSocket и browser source в OBS).
 
 mod api;
+mod music;
 mod static_files;
 mod ws;
 
@@ -32,6 +33,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/auth/donationalerts/login", post(api::da_login))
         .route("/auth/donationalerts/logout", post(api::da_logout))
         .route("/system/open", post(api::open_target))
+        .route("/music", get(music::view))
+        .route("/music/request", post(music::request))
+        .route("/music/player", post(music::player))
+        .route("/music/player/report", post(music::report))
+        .route("/music/tracks/{id}", post(music::track))
+        .route("/music/settings", get(music::get_settings).put(music::put_settings))
+        .route("/media/{id}", get(music::media))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         // Ключ не передаётся браузером автоматически, поэтому открытый CORS
         // безопасен и позволяет внешним скриптам и виджетам ходить в API.

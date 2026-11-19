@@ -27,6 +27,7 @@ pub struct Config {
     pub api_token: String,
     pub twitch: TwitchConfig,
     pub donationalerts: DaConfig,
+    pub music: crate::music::MusicConfig,
 }
 
 impl Default for Config {
@@ -36,6 +37,7 @@ impl Default for Config {
             api_token: random_token(),
             twitch: TwitchConfig::default(),
             donationalerts: DaConfig::default(),
+            music: Default::default(),
         }
     }
 }

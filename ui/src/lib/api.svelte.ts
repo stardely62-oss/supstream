@@ -57,6 +57,101 @@ export interface Settings {
   data_dir: string;
 }
 
+// ───── Музыка ─────
+
+export type TrackStatus =
+  | "resolving"
+  | "checking"
+  | "ready"
+  | "needs_review"
+  | "rejected"
+  | "failed"
+  | "playing"
+  | "played"
+  | "skipped";
+
+export type Policy = "allow" | "mute" | "review" | "reject";
+export type Category = "hate" | "profanity";
+
+export interface Hit {
+  start: number;
+  end: number;
+  word: string;
+  category: Category;
+}
+
+export interface Mute {
+  id: number;
+  start: number;
+  end: number;
+  label: string;
+  category?: Category;
+  auto: boolean;
+  enabled: boolean;
+}
+
+export interface Track {
+  id: string;
+  query: string;
+  requested_by: { name: string; via: "panel" | "chat" | "reward" | "donation"; amount?: string };
+  requested_at: string;
+  status: TrackStatus;
+  error?: string;
+  meta?: {
+    video_id: string;
+    url: string;
+    title: string;
+    artist: string;
+    track_title: string;
+    duration?: number;
+    thumbnail?: string;
+    extractor: string;
+  };
+  check?: {
+    lyrics?: { source: string; synced: boolean; instrumental: boolean; matched_artist: string; matched_title: string };
+    lines: { time?: number; end?: number; text: string; hits?: Hit[] }[];
+    hate: number;
+    profanity: number;
+    reasons: string[];
+    precision: string;
+  };
+  mutes: Mute[];
+  approved: boolean;
+}
+
+export interface MusicView {
+  player: { current: string | null; paused: boolean; position: number; duration?: number; panic: boolean; volume: number };
+  players_connected: number;
+  now: Track | null;
+  queue: Track[];
+  history: Track[];
+}
+
+export interface Progress {
+  track_id: string | null;
+  position: number;
+  duration?: number;
+}
+
+export interface MusicSettings {
+  enabled: boolean;
+  max_duration_secs: number;
+  per_user_limit: number;
+  hate: Policy;
+  profanity: Policy;
+  no_lyrics: Policy;
+  mute_padding: number;
+  chat_enabled: boolean;
+  chat_command: string;
+  chat_min_role: "everyone" | "subscriber" | "vip" | "moderator";
+  chat_replies: boolean;
+  reward_title: string;
+  donation_min_amount: number;
+  volume: number;
+  custom_rules: { pattern: string; category: Category; kind: "exact" | "prefix" | "contains" | "root" }[];
+  allow_words: string[];
+}
+
 const TOKEN_KEY = "supstream.token";
 const MAX_EVENTS = 300;
 
@@ -97,6 +192,8 @@ class Store {
   version = $state("");
   connections = $state<Connections | null>(null);
   events = $state<StreamEvent[]>([]);
+  music = $state<MusicView | null>(null);
+  progress = $state<Progress | null>(null);
 
   #ws: WebSocket | null = null;
   #retry = 0;
@@ -148,6 +245,11 @@ class Store {
         this.version = m.version;
         this.connections = m.status;
         this.events = (m.events as StreamEvent[]).slice().reverse();
+        this.music = m.music;
+      } else if (m.kind === "music") {
+        this.music = m.music;
+      } else if (m.kind === "music_progress") {
+        this.progress = m.progress;
       } else if (m.kind === "status") {
         this.connections = m.status;
       } else if (m.kind === "event") {

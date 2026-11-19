@@ -25,6 +25,7 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub twitch: TwitchService,
     pub da: DaService,
+    pub music: crate::music::MusicService,
 }
 
 /// Ошибка «нечего подключать»: нет ключей или не выполнен вход.
@@ -120,6 +121,7 @@ pub async fn start(opts: StartOptions) -> Result<Running> {
         .timeout(Duration::from_secs(20))
         .build()?;
 
+    let store_volume = store.config().music.volume;
     let state = Arc::new(AppState {
         store,
         bus: EventBus::new(),
@@ -127,7 +129,10 @@ pub async fn start(opts: StartOptions) -> Result<Running> {
         http,
         twitch: TwitchService::new(opts.twitch_endpoints.unwrap_or_else(twitch::Endpoints::from_env)),
         da: DaService::new(opts.da_endpoints.unwrap_or_else(donationalerts::Endpoints::from_env)),
+        music: crate::music::MusicService::new(&dir, store_volume),
     });
+    crate::music::clean_cache(&state);
+    crate::music::resume_pending(&state);
 
     let cfg = state.store.config();
     let port = opts.port.unwrap_or(cfg.server.port);
@@ -149,6 +154,7 @@ pub async fn start(opts: StartOptions) -> Result<Running> {
         server,
         tokio::spawn(twitch::supervise(state.clone())),
         tokio::spawn(donationalerts::supervise(state.clone())),
+        tokio::spawn(crate::music::requests::run(state.clone())),
     ];
 
     tracing::info!("Supstream {VERSION} запущен на http://{addr}");
