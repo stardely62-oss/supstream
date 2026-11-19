@@ -1,0 +1,4 @@
+[env]
+# libopus внутри audiopus_sys объявляет cmake_minimum_required < 3.5, а CMake 4 такие
+# проекты отвергает. Эта переменная разрешает собрать их с политиками CMake 3.5.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
