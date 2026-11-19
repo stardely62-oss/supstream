@@ -42,7 +42,7 @@ jobs:
       - run: pnpm tauri build
         env:
           SUPSTREAM_TWITCH_CLIENT_ID: ${{ secrets.SUPSTREAM_TWITCH_CLIENT_ID }}
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: supstream-windows-setup
           path: target/release/bundle/nsis/*.exe
