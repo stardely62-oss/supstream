@@ -5,7 +5,8 @@
 //! * `{ "kind": "event", "event": {..} }`;
 //! * `{ "kind": "status", "status": {..} }`;
 //! * `{ "kind": "music", "music": {..} }` — очередь и плеер;
-//! * `{ "kind": "music_progress", "progress": {..} }` — позиция трека.
+//! * `{ "kind": "music_progress", "progress": {..} }` — позиция трека;
+//! * `{ "kind": "analysis", "analysis": {..} }` — компоненты точного глушения (загрузка, состояние).
 //!
 //! `?client=player` — подключился виджет-плеер (панель показывает, что он есть).
 
@@ -56,6 +57,8 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
     let mut status = state.status.subscribe();
     let mut music = state.music.subscribe();
     let mut progress = state.music.subscribe_progress();
+    let mut analysis = state.analysis.subscribe();
+    analysis.borrow_and_update();
     music.borrow_and_update();
     progress.borrow_and_update();
     let hello = json!({
@@ -64,6 +67,7 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
         "status": *status.borrow_and_update(),
         "events": state.bus.recent(100),
         "music": state.music.view(),
+        "analysis": state.analysis.status(),
     });
     if !send(&mut socket, hello).await {
         return;
@@ -91,6 +95,11 @@ async fn session(mut socket: WebSocket, state: Arc<AppState>) {
                 if changed.is_err() { return; }
                 let p = progress.borrow_and_update().clone();
                 if !send(&mut socket, json!({ "kind": "music_progress", "progress": p })).await { return; }
+            },
+            changed = analysis.changed() => {
+                if changed.is_err() { return; }
+                analysis.borrow_and_update();
+                if !send(&mut socket, json!({ "kind": "analysis", "analysis": state.analysis.status() })).await { return; }
             },
             msg = socket.recv() => match msg {
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,

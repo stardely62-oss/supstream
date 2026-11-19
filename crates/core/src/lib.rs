@@ -1,5 +1,6 @@
 //! Ядро Supstream: подключения к площадкам, шина событий, локальное API.
 
+pub mod analysis;
 pub mod app;
 pub mod bus;
 pub mod donationalerts;

@@ -87,3 +87,11 @@ export function clock(sec: number | undefined | null) {
   const s = Math.max(0, Math.floor(sec));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+/** 75.43 → «1:15.4» — для отметок глушения. */
+export function clockFine(sec: number) {
+  if (!Number.isFinite(sec)) return "–:––";
+  const s = Math.max(0, sec);
+  const m = Math.floor(s / 60);
+  return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
+}

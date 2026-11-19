@@ -1,6 +1,6 @@
 <script lang="ts">
   import { store, type Hit, type Track } from "../lib/api.svelte";
-  import { clock } from "../lib/format";
+  import { clock, clockFine } from "../lib/format";
 
   let { track }: { track: Track } = $props();
 
@@ -60,8 +60,12 @@
       <p class="faint small">
         Текст: {check.lyrics.matched_artist} — {check.lyrics.matched_title}
         ({check.lyrics.synced ? "с таймкодами" : "без таймкодов"}, {check.lyrics.source}).
-        {#if check.precision === "line_estimate"}
-          Место слова оценено по строке, поэтому отметки с запасом.
+        {#if check.precision === "aligned"}
+          Места слов найдены по звуку — отметки точные.
+        {:else if check.precision === "partial"}
+          Часть слов найдена по звуку, остальные — оценка по строке (с запасом).
+        {:else if check.precision === "line_estimate"}
+          Место слова оценено по строке, поэтому отметки с запасом. Точнее — с «Точным глушением» в настройках.
         {/if}
       </p>
     {/if}
@@ -79,7 +83,7 @@
                 checked={m.enabled}
                 onchange={(e) => cmd({ action: "set_mute", mute_id: m.id, enabled: e.currentTarget.checked })}
               />
-              <span class="mono">{clock(m.start)}–{clock(m.end)}</span>
+              <span class="mono">{clockFine(m.start)}–{clockFine(m.end)}</span>
               <span class="label" class:hate={m.category === "hate"}>{m.label}</span>
               {#if !m.auto}<span class="faint small">вручную</span>{/if}
             </label>

@@ -5,6 +5,8 @@
 //! поэтому отметки с запасом. Следующий шаг — выравнивание текста по звуку
 //! (GigaAM/Whisper), тогда отметки станут точными до слова.
 
+use std::collections::HashMap;
+
 use super::filter::{Category, Filter};
 use super::lyrics::Lyrics;
 use super::track::{CheckReport, LyricsInfo, MusicConfig, Mute, Policy, ReportLine, Status};
@@ -87,7 +89,6 @@ pub fn evaluate(
 
     let mut lines = Vec::with_capacity(lyrics.lines.len());
     let (mut hate, mut profanity) = (0, 0);
-    let mut mutes: Vec<Mute> = Vec::new();
 
     for (i, l) in lyrics.lines.iter().enumerate() {
         let end = l.time.map(|t| {
@@ -99,34 +100,10 @@ pub fn evaluate(
             e.max(t + 0.5)
         });
         let hits = filter.scan(&l.text);
-        let len = l.text.chars().count().max(1) as f64;
         for h in &hits {
             match h.category {
                 Category::Hate => hate += 1,
                 Category::Profanity => profanity += 1,
-            }
-            if let (Some(t0), Some(t1)) = (l.time, end) {
-                let span = (t1 - t0) * SUNG_SHARE;
-                let s = t0 + span * (h.start as f64 / len) - cfg.mute_padding;
-                let e = t0 + span * (h.end as f64 / len) + cfg.mute_padding;
-                let policy = match h.category {
-                    Category::Hate => cfg.hate,
-                    Category::Profanity => cfg.profanity,
-                };
-                mutes.push(Mute {
-                    id: 0,
-                    start: s.max(t0 - 0.3).max(0.0),
-                    end: e.min(t1),
-                    label: h.word.clone(),
-                    category: Some(h.category),
-                    auto: true,
-                    // Оскорбления вырезаем всегда (даже если трек одобрят вручную),
-                    // мат — по настройке. Отклонённый трек тоже получает отметки:
-                    // если стример его одобрит, они уже будут на месте.
-                    enabled: h.category == Category::Hate
-                        || matches!(policy, Policy::Mute | Policy::Bleep | Policy::Reject),
-                    bleep: h.category == Category::Profanity && policy != Policy::Mute,
-                });
             }
         }
         lines.push(ReportLine { time: l.time, end, text: l.text.clone(), hits });
@@ -177,6 +154,7 @@ pub fn evaluate(
         reasons.push("Нарушений в тексте не найдено".into());
     }
 
+    let lines_for_mutes = lines.clone();
     Outcome {
         report: CheckReport {
             lyrics: Some(info),
@@ -186,9 +164,53 @@ pub fn evaluate(
             reasons,
             precision: if lyrics.synced { "line_estimate".into() } else { "none".into() },
         },
-        mutes: merge(mutes),
+        mutes: build_mutes(&lines_for_mutes, cfg, &HashMap::new()),
         status,
     }
+}
+
+/// Точное время нарушений из анализа звука: (строка, начало нарушения в символах) → (начало, конец).
+pub type HitTimes = HashMap<(usize, usize), (f64, f64)>;
+
+/// Отметки глушения по строкам текста. Если для нарушения есть точное время из анализа
+/// звука — отметка узкая (слово + небольшой запас), иначе — оценка по положению в строке.
+pub fn build_mutes(lines: &[ReportLine], cfg: &MusicConfig, precise: &HitTimes) -> Vec<Mute> {
+    let hate_policy = cfg.hate.for_hate();
+    let prof_policy = cfg.profanity.for_profanity();
+    let mut mutes = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let (Some(t0), Some(t1)) = (l.time, l.end) else { continue };
+        let len = l.text.chars().count().max(1) as f64;
+        for h in &l.hits {
+            let (start, end) = match precise.get(&(i, h.start)) {
+                Some(&(s, e)) => (s - crate::analysis::PAD_BEFORE, e + crate::analysis::PAD_AFTER),
+                None => {
+                    let span = (t1 - t0) * SUNG_SHARE;
+                    let s = t0 + span * (h.start as f64 / len) - cfg.mute_padding;
+                    let e = t0 + span * (h.end as f64 / len) + cfg.mute_padding;
+                    (s.max(t0 - 0.3), e.min(t1))
+                }
+            };
+            let policy = match h.category {
+                Category::Hate => hate_policy,
+                Category::Profanity => prof_policy,
+            };
+            mutes.push(Mute {
+                id: 0,
+                start: start.max(0.0),
+                end,
+                label: h.word.clone(),
+                category: Some(h.category),
+                auto: true,
+                // Запретки вырезаем всегда (даже если трек одобрят вручную), мат — по настройке.
+                // Отклонённый трек тоже получает отметки: если стример его одобрит, они уже на месте.
+                enabled: h.category == Category::Hate
+                    || matches!(policy, Policy::Mute | Policy::Bleep | Policy::Reject),
+                bleep: h.category == Category::Profanity && policy != Policy::Mute,
+            });
+        }
+    }
+    merge(mutes)
 }
 
 /// Сливает пересекающиеся отметки, чтобы звук не «моргал».
@@ -271,6 +293,20 @@ mod tests {
         assert_eq!(o.status, Status::Ready);
         assert_eq!(o.mutes.len(), 1, "пик и вырезание рядом сливаются: {:?}", o.mutes);
         assert!(!o.mutes[0].bleep, "оскорбления вырезаются, а не запикиваются");
+    }
+
+    #[test]
+    fn precise_times_give_narrow_mutes_and_others_fall_back() {
+        let l = lyrics(true, &[(10.0, "я иду домой, бля, опять сука"), (16.0, "дальше чисто")]);
+        let o = evaluate(Some(&l), Some(180.0), &filter(), &MusicConfig::default());
+        let hits = &o.report.lines[0].hits;
+        assert_eq!(hits.len(), 2);
+        // Точное время есть только у первого слова.
+        let precise: HitTimes = [((0, hits[0].start), (11.40, 11.70))].into_iter().collect();
+        let m = build_mutes(&o.report.lines, &MusicConfig::default(), &precise);
+        assert_eq!(m.len(), 2, "{m:?}");
+        assert!((m[0].start - 11.25).abs() < 1e-9 && (m[0].end - 12.05).abs() < 1e-9, "{:?}", m[0]);
+        assert!(m[1].end - m[1].start > 1.0, "без точного времени — широкая оценка");
     }
 
     #[test]

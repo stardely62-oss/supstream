@@ -159,6 +159,20 @@ export interface MusicSettings {
   local_dirs: string[];
   reward_id: string;
   reward_cost: number;
+  precise_mutes: boolean;
+  analysis_threads: number;
+}
+
+export interface AnalysisStatus {
+  components: { id: string; label: string; size: number; installed: boolean }[];
+  total_size: number;
+  installed: boolean;
+  runtime_error: string | null;
+  install:
+    | { state: "idle" }
+    | { state: "downloading"; asset: string; done: number; total: number }
+    | { state: "failed"; message: string };
+  loaded: boolean;
 }
 
 const TOKEN_KEY = "supstream.token";
@@ -203,6 +217,7 @@ class Store {
   events = $state<StreamEvent[]>([]);
   music = $state<MusicView | null>(null);
   progress = $state<Progress | null>(null);
+  analysis = $state<AnalysisStatus | null>(null);
 
   #ws: WebSocket | null = null;
   #retry = 0;
@@ -255,6 +270,9 @@ class Store {
         this.connections = m.status;
         this.events = (m.events as StreamEvent[]).slice().reverse();
         this.music = m.music;
+        this.analysis = m.analysis;
+      } else if (m.kind === "analysis") {
+        this.analysis = m.analysis;
       } else if (m.kind === "music") {
         this.music = m.music;
       } else if (m.kind === "music_progress") {

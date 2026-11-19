@@ -41,6 +41,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/music/settings", get(music::get_settings).put(music::put_settings))
         .route("/music/reward", axum::routing::put(music::put_reward).delete(music::delete_reward))
         .route("/music/safe-channels", post(music::add_safe_channel))
+        .route("/analysis", get(music::analysis_status))
+        .route("/analysis/install", post(music::analysis_install))
         .route("/media/{id}", get(music::media))
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
         // Ключ не передаётся браузером автоматически, поэтому открытый CORS

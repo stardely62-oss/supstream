@@ -109,6 +109,10 @@ pub struct MusicConfig {
     /// Награда, созданная приложением: только для неё Twitch даёт вернуть баллы.
     pub reward_id: String,
     pub reward_cost: u32,
+    /// Уточнять отметки анализом звука (если компоненты скачаны).
+    pub precise_mutes: bool,
+    /// Потоки процессора для анализа (0 — половина ядер).
+    pub analysis_threads: u32,
 }
 
 impl Default for MusicConfig {
@@ -135,6 +139,8 @@ impl Default for MusicConfig {
             local_dirs: Vec::new(),
             reward_id: String::new(),
             reward_cost: 1000,
+            precise_mutes: true,
+            analysis_threads: 0,
         }
     }
 }

@@ -26,6 +26,7 @@ pub struct AppState {
     pub twitch: TwitchService,
     pub da: DaService,
     pub music: crate::music::MusicService,
+    pub analysis: Arc<crate::analysis::AnalysisService>,
 }
 
 /// Ошибка «нечего подключать»: нет ключей или не выполнен вход.
@@ -130,6 +131,7 @@ pub async fn start(opts: StartOptions) -> Result<Running> {
         twitch: TwitchService::new(opts.twitch_endpoints.unwrap_or_else(twitch::Endpoints::from_env)),
         da: DaService::new(opts.da_endpoints.unwrap_or_else(donationalerts::Endpoints::from_env)),
         music: crate::music::MusicService::new(&dir, store_volume),
+        analysis: Arc::new(crate::analysis::AnalysisService::new(&dir)),
     });
     crate::music::clean_cache(&state);
     crate::music::resume_pending(&state);
@@ -155,6 +157,17 @@ pub async fn start(opts: StartOptions) -> Result<Running> {
         tokio::spawn(twitch::supervise(state.clone())),
         tokio::spawn(donationalerts::supervise(state.clone())),
         tokio::spawn(crate::music::requests::run(state.clone())),
+        {
+            // Выгружаем модели анализа из памяти, если ими давно не пользовались.
+            let st = state.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(30));
+                loop {
+                    tick.tick().await;
+                    st.analysis.unload_if_idle();
+                }
+            })
+        },
     ];
 
     tracing::info!("Supstream {VERSION} запущен на http://{addr}");

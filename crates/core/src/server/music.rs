@@ -173,3 +173,17 @@ pub async fn add_safe_channel(
         .map_err(ApiError::from)?;
     Ok(Json(state.store.config().music))
 }
+
+pub async fn analysis_status(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<crate::analysis::AnalysisStatus> {
+    Ok(Json(state.analysis.status()))
+}
+
+/// Скачать компоненты точного глушения (в фоне; прогресс — по WebSocket).
+pub async fn analysis_install(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<crate::analysis::AnalysisStatus> {
+    crate::analysis::install(&state).map_err(|e| ApiError::bad_request(format!("{e:#}")))?;
+    Ok(Json(state.analysis.status()))
+}

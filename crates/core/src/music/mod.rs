@@ -359,7 +359,8 @@ async fn process(state: &Arc<AppState>, id: &str) -> Result<()> {
     });
 
     let filter = filter::Filter::with_custom(&cfg.custom_rules, &cfg.allow_words);
-    let outcome = check::evaluate(lyrics.as_ref(), meta.duration, &filter, &cfg);
+    let mut outcome = check::evaluate(lyrics.as_ref(), meta.duration, &filter, &cfg);
+    refine_mutes(state, &cfg, &audio, &mut outcome).await;
     music.update_track(id, |t| {
         t.audio_file = Some(audio);
         t.check = Some(outcome.report);
@@ -375,6 +376,60 @@ async fn process(state: &Arc<AppState>, id: &str) -> Result<()> {
     });
     requests::notify_result(state, id);
     Ok(())
+}
+
+/// Точные отметки: для строк с нарушениями ищем слова по звуку (если компоненты скачаны).
+async fn refine_mutes(
+    state: &Arc<AppState>,
+    cfg: &MusicConfig,
+    audio: &std::path::Path,
+    outcome: &mut check::Outcome,
+) {
+    let synced = outcome.report.lyrics.as_ref().is_some_and(|l| l.synced);
+    let total: usize = outcome.report.lines.iter().map(|l| l.hits.len()).sum();
+    if !cfg.precise_mutes || !synced || total == 0 || !state.analysis.installed() {
+        return;
+    }
+    let requests: Vec<crate::analysis::LineRequest> = outcome
+        .report
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| !l.hits.is_empty())
+        .filter_map(|(i, l)| {
+            Some(crate::analysis::LineRequest {
+                index: i,
+                start: l.time?,
+                end: l.end?,
+                text: l.text.clone(),
+                hits: l.hits.iter().map(|h| (h.start, h.end)).collect(),
+            })
+        })
+        .collect();
+    let threads = if cfg.analysis_threads == 0 {
+        crate::analysis::default_threads()
+    } else {
+        cfg.analysis_threads as usize
+    };
+    match state.analysis.refine(audio.to_path_buf(), requests, threads).await {
+        Ok(times) => {
+            let found = times.len();
+            outcome.mutes = check::build_mutes(&outcome.report.lines, cfg, &times);
+            outcome.report.precision = if found == total { "aligned".into() } else { "partial".into() };
+            outcome.report.reasons.push(if found == total {
+                format!("Места всех слов ({found}) найдены по звуку — отметки точные")
+            } else {
+                format!("По звуку найдено {found} из {total} слов, остальные заглушены по оценке строки")
+            });
+        }
+        Err(e) => {
+            tracing::warn!("точное глушение не удалось: {e:#}");
+            outcome
+                .report
+                .reasons
+                .push(format!("Точное глушение не удалось ({e:#}) — отметки по оценке строки"));
+        }
+    }
 }
 
 /// Откуда взять трек с учётом режима:

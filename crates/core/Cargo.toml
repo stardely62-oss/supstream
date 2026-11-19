@@ -14,7 +14,7 @@ tracing.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2", "charset", "stream"] }
 tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
@@ -24,6 +24,15 @@ directories = "6"
 rust-embed = "8"
 mime_guess = "2"
 open = "5"
+# Анализ звука: ONNX Runtime подгружается динамически (DLL скачивается вместе с моделями),
+# поэтому exe не растёт, а на Windows работает DirectML (любая видеокарта).
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std", "directml"] }
+realfft = "3"
+sha2 = "0.10"
+# Декодирование звука без ffmpeg: Symphonia (контейнеры, mp3/flac/aac/vorbis) + libopus (Opus из WebM).
+symphonia = { version = "0.5", default-features = false, features = ["mkv", "ogg", "mp3", "aac", "isomp4", "flac", "wav", "pcm", "vorbis"] }
+opus = "0.3"
+flate2 = "1"
 
 [dev-dependencies]
 tokio-tungstenite = { version = "0.27" }

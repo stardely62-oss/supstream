@@ -13,6 +13,13 @@
   let busy = $state<string | null>(null);
   let actionError = $state<Record<string, string>>({});
   const twitchConnected = $derived(store.connections?.twitch.state === "connected");
+  const an = $derived(store.analysis);
+  const mb = (b: number) => `${Math.round(b / 1e6)} МБ`;
+  const cores = typeof navigator !== "undefined" ? navigator.hardwareConcurrency || 4 : 4;
+
+  async function installAnalysis() {
+    await act("analysis", () => store.post("/analysis/install").then(() => s as MusicSettings));
+  }
   let saving = $state(false);
   let saved = $state(false);
   let error = $state("");
@@ -217,6 +224,53 @@
     </fieldset>
 
     <fieldset>
+      <legend>Точное глушение по звуку</legend>
+      <p class="hint">
+        Программа выделяет голос из трека и находит, где именно звучит каждое запрещённое слово. Отметка — около 0,8 с
+        вместо ~2 с по оценке строки, и слово в конце строки не проскочит. Анализируются только строки с нарушениями;
+        работает на процессоре.
+      </p>
+      {#if an}
+        {#if an.installed}
+          <p class="ok-line"><span class="dot ok"></span> Компоненты установлены{an.loaded ? " · модели в памяти" : ""}</p>
+          {#if an.runtime_error}<p class="error-text">{an.runtime_error}</p>{/if}
+        {:else if an.install.state === "downloading"}
+          <div class="dl">
+            <div class="hint">Скачиваю: {an.install.asset} — {mb(an.install.done)} из {mb(an.install.total)}</div>
+            <div class="dl-bar"><div style:width={`${an.install.total ? (an.install.done / an.install.total) * 100 : 0}%`}></div></div>
+          </div>
+        {:else}
+          <ul class="components">
+            {#each an.components as c}
+              <li><span class="dot" class:ok={c.installed}></span>{c.label}<span class="hint">{mb(c.size)}</span></li>
+            {/each}
+          </ul>
+          <div class="row">
+            <button class="btn primary" disabled={busy !== null} onclick={installAnalysis}>
+              Скачать ({mb(an.components.filter((c) => !c.installed).reduce((a, c) => a + c.size, 0))})
+            </button>
+          </div>
+          {#if an.install.state === "failed"}<p class="error-text">{an.install.message}</p>{/if}
+          {#if actionError["analysis"]}<p class="error-text">{actionError["analysis"]}</p>{/if}
+          <p class="hint">
+            Модель выравнивания (MMS) — лицензия CC BY-NC 4.0: только некоммерческое использование. Каждый файл
+            проверяется по контрольной сумме.
+          </p>
+        {/if}
+      {/if}
+      <div class="grid">
+        <label class="switch"><input type="checkbox" bind:checked={s.precise_mutes} /> Использовать точное глушение</label>
+        <label
+          >Потоки процессора
+          <select bind:value={s.analysis_threads}>
+            <option value={0}>авто (половина ядер)</option>
+            {#each Array.from({ length: Math.max(1, cores) }, (_, i) => i + 1) as n}<option value={n}>{n}</option>{/each}
+          </select>
+        </label>
+      </div>
+    </fieldset>
+
+    <fieldset>
       <legend>Ограничения</legend>
       <div class="grid">
         <label
@@ -374,6 +428,41 @@
     margin: 0;
     font-size: 12px;
     color: var(--text-3);
+  }
+  .ok-line {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .components {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .components li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dl {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .dl-bar {
+    height: 6px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+  .dl-bar div {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--love));
+    transition: width 0.25s;
   }
   .hint.block {
     display: block;
