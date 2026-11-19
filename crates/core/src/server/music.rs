@@ -99,8 +99,7 @@ pub async fn media(State(state): State<Arc<AppState>>, Path(id): Path<String>, r
     if !path.starts_with(state.music.cache_dir()) {
         return (StatusCode::FORBIDDEN, "нет доступа").into_response();
     }
-    match ServeFile::new(path).oneshot(req).await {
-        Ok(r) => r.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    // У ServeFile ошибок не бывает (тип ошибки — Infallible).
+    let Ok(resp) = ServeFile::new(path).oneshot(req).await;
+    resp.into_response()
 }
