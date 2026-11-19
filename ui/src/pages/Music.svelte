@@ -24,6 +24,27 @@
   let tab = $state<"queue" | "history" | "settings">("queue");
   let copied = $state(false);
   let obsHelp = $state(false);
+  let mode = $state<"any" | "safe" | null>(null);
+
+  // Режим источников показываем предупреждением; перечитываем при уходе с вкладки настроек.
+  $effect(() => {
+    if (tab !== "settings") {
+      store
+        .get<{ source_mode: "any" | "safe" }>("/music/settings")
+        .then((c) => (mode = c.source_mode))
+        .catch(() => {});
+    }
+  });
+
+  async function enableSafe() {
+    await run(async () => {
+      const c = await store.get<Record<string, unknown>>("/music/settings");
+      c.source_mode = "safe";
+      await store.put("/music/settings", c);
+      mode = "safe";
+      tab = "settings";
+    });
+  }
 
   const m = $derived(store.music);
   const now = $derived(m?.now ?? null);
@@ -92,6 +113,18 @@
 </header>
 
 {#if m}
+  {#if mode === "any"}
+    <div class="card dmca">
+      <span>
+        <b>Режим «любая музыка».</b>
+        <span class="muted">Twitch запрещает чужую музыку без лицензии — возможны жалобы на записи и клипы.</span>
+      </span>
+      <button class="btn small" onclick={enableSafe}>Включить безопасный режим</button>
+    </div>
+  {:else if mode === "safe"}
+    <p class="faint small safe-badge">🛡️ Безопасный режим: только разрешённые каналы и своя папка</p>
+  {/if}
+
   <!-- Плеер в OBS -->
   {#if m.players_connected === 0}
     <div class="card notice">
@@ -207,6 +240,7 @@
               <span class="track-title">
                 <span class="name">{title(t)}</span>
                 <span class="faint small">
+                  {#if t.meta?.local}📁{/if}
                   {VIA[t.requested_by.via]} {t.requested_by.name}
                   {#if t.meta?.duration} · {clock(t.meta.duration)}{/if}
                   {#if t.mutes.some((x) => x.enabled)} · 🔇 {t.mutes.filter((x) => x.enabled).length}{/if}
@@ -263,6 +297,20 @@
   .panic.on {
     background: var(--bad);
     color: #fff;
+  }
+  .dmca {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+    background: color-mix(in srgb, var(--warn) 7%, var(--surface));
+  }
+  .safe-badge {
+    margin: 0 0 8px;
   }
   .notice {
     display: flex;

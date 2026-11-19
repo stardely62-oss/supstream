@@ -85,6 +85,8 @@ pub async fn put_settings(
     if cfg.hate == music::track::Policy::Allow {
         cfg.hate = music::track::Policy::Review;
     }
+    // Награда меняется только через /music/reward — устаревшая форма в панели её не затрёт.
+    cfg.reward_id = state.store.config().music.reward_id;
     let saved = cfg.clone();
     state.store.update_config(|c| c.music = saved).map_err(ApiError::from)?;
     Ok(Json(cfg))
@@ -95,11 +97,79 @@ pub async fn media(State(state): State<Arc<AppState>>, Path(id): Path<String>, r
     let Some(path) = state.music.track(&id).and_then(|t| t.audio_file) else {
         return (StatusCode::NOT_FOUND, "трек не найден").into_response();
     };
-    // Отдаём только файлы из кеша музыки.
-    if !path.starts_with(state.music.cache_dir()) {
+    // Отдаём только файлы из кеша музыки и из папок своей музыки.
+    let dirs = state.store.config().music.local_dirs;
+    if !path.starts_with(state.music.cache_dir()) && !music::library::contains(&dirs, &path) {
         return (StatusCode::FORBIDDEN, "нет доступа").into_response();
     }
     // У ServeFile ошибок не бывает (тип ошибки — Infallible).
     let Ok(resp) = ServeFile::new(path).oneshot(req).await;
     resp.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RewardBody {
+    title: String,
+    cost: u32,
+}
+
+/// Создать или обновить награду «Заказать трек» на Twitch.
+pub async fn put_reward(
+    State(state): State<Arc<AppState>>,
+    Json(b): Json<RewardBody>,
+) -> ApiResult<MusicConfig> {
+    let title = b.title.trim();
+    if title.is_empty() || title.chars().count() > 45 {
+        return Err(ApiError::bad_request("название награды — от 1 до 45 символов"));
+    }
+    let cfg = state.store.config().music;
+    let prompt = "Ссылка или «исполнитель — название». Если трек не пройдёт проверку, баллы вернутся.";
+    let id = crate::twitch::upsert_reward(&state, &cfg.reward_id, title, b.cost, prompt).await?;
+    let title = title.to_string();
+    state
+        .store
+        .update_config(|c| {
+            c.music.reward_id = id;
+            c.music.reward_title = title;
+            c.music.reward_cost = b.cost.max(1);
+        })
+        .map_err(ApiError::from)?;
+    Ok(Json(state.store.config().music))
+}
+
+pub async fn delete_reward(State(state): State<Arc<AppState>>) -> ApiResult<MusicConfig> {
+    let id = state.store.config().music.reward_id;
+    if !id.is_empty() {
+        crate::twitch::delete_reward(&state, &id).await?;
+    }
+    state
+        .store
+        .update_config(|c| {
+            c.music.reward_id.clear();
+            c.music.reward_title.clear();
+        })
+        .map_err(ApiError::from)?;
+    Ok(Json(state.store.config().music))
+}
+
+#[derive(Deserialize)]
+pub struct ChannelBody {
+    url: String,
+}
+
+/// Добавить разрешённый канал по ссылке на него или на любое его видео.
+pub async fn add_safe_channel(
+    State(state): State<Arc<AppState>>,
+    Json(b): Json<ChannelBody>,
+) -> ApiResult<MusicConfig> {
+    let ch = state.music.ytdlp.resolve_channel(&state.http, b.url.trim()).await.map_err(map_err)?;
+    state
+        .store
+        .update_config(|c| {
+            if !c.music.safe_channels.iter().any(|x| x.channel_id == ch.channel_id) {
+                c.music.safe_channels.push(ch);
+            }
+        })
+        .map_err(ApiError::from)?;
+    Ok(Json(state.store.config().music))
 }

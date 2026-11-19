@@ -129,15 +129,40 @@ impl YtDlp {
 
     /// Данные о треке по ссылке или поисковому запросу.
     pub async fn resolve(&self, http: &reqwest::Client, query: &str) -> Result<TrackMeta> {
+        let target = if is_url(query) { query.to_string() } else { format!("ytsearch1:{query}") };
+        parse_meta(&self.json(http, &target, &["--no-playlist"]).await?)
+    }
+
+    /// Поиск только внутри канала (безопасный режим): `youtube.com/channel/UC…/search?query=…`.
+    pub async fn search_in_channel(
+        &self,
+        http: &reqwest::Client,
+        channel_id: &str,
+        query: &str,
+    ) -> Result<TrackMeta> {
+        let mut url = url::Url::parse(&format!("https://www.youtube.com/channel/{channel_id}/search"))?;
+        url.query_pairs_mut().append_pair("query", query);
+        parse_meta(&self.json(http, url.as_str(), &["--playlist-items", "1"]).await?)
+    }
+
+    /// Канал по ссылке на него или на любое его видео.
+    pub async fn resolve_channel(
+        &self,
+        http: &reqwest::Client,
+        link: &str,
+    ) -> Result<super::track::SafeChannel> {
+        if !is_url(link) {
+            bail!("нужна ссылка на канал или видео");
+        }
+        let v = self.json(http, link, &["--playlist-items", "1"]).await?;
+        parse_channel(&v, link)
+    }
+
+    async fn json(&self, http: &reqwest::Client, target: &str, extra: &[&str]) -> Result<Value> {
         let bin = self.path(http).await?;
-        let target = if query.starts_with("http://") || query.starts_with("https://") {
-            query.to_string()
-        } else {
-            format!("ytsearch1:{query}")
-        };
         let out = tokio::time::timeout(
             Duration::from_secs(60),
-            command(&bin).args(["-J", "--no-playlist", "--no-warnings", "--"]).arg(&target).output(),
+            command(&bin).arg("-J").arg("--no-warnings").args(extra).arg("--").arg(target).output(),
         )
         .await
         .context("поиск трека занял слишком много времени")?
@@ -145,8 +170,7 @@ impl YtDlp {
         if !out.status.success() {
             bail!("{}", short_error(&out.stderr));
         }
-        let v: Value = serde_json::from_slice(&out.stdout).context("yt-dlp: непонятный ответ")?;
-        parse_meta(&v)
+        serde_json::from_slice(&out.stdout).context("yt-dlp: непонятный ответ")
     }
 
     /// Скачивает звук в `dir`, возвращает путь к файлу.
@@ -196,6 +220,24 @@ impl YtDlp {
 fn filetime_touch(path: &Path) -> std::io::Result<()> {
     let f = std::fs::OpenOptions::new().append(true).open(path)?;
     f.set_modified(std::time::SystemTime::now())
+}
+
+pub fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+pub fn parse_channel(v: &Value, link: &str) -> Result<super::track::SafeChannel> {
+    let first = v.get("entries").and_then(Value::as_array).and_then(|e| e.first());
+    let pick = |k: &str| {
+        v.get(k)
+            .and_then(Value::as_str)
+            .or_else(|| first.and_then(|f| f.get(k)).and_then(Value::as_str))
+            .filter(|x| !x.is_empty())
+            .map(str::to_string)
+    };
+    let channel_id = pick("channel_id").context("не удалось определить канал по ссылке")?;
+    let name = pick("channel").or_else(|| pick("uploader")).unwrap_or_else(|| channel_id.clone());
+    Ok(super::track::SafeChannel { channel_id, name, url: link.to_string() })
 }
 
 fn safe_id(id: &str) -> String {
@@ -251,6 +293,14 @@ pub fn parse_meta(v: &Value) -> Result<TrackMeta> {
         duration: v.get("duration").and_then(Value::as_f64),
         thumbnail: v.get("thumbnail").and_then(Value::as_str).map(str::to_string),
         extractor: s(v, "extractor_key"),
+        channel_id: v.get("channel_id").and_then(Value::as_str).filter(|x| !x.is_empty()).map(str::to_string),
+        channel: v
+            .get("channel")
+            .or(v.get("uploader"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        local: false,
     })
 }
 
@@ -283,6 +333,17 @@ mod tests {
         assert_eq!((m.artist.as_str(), m.track_title.as_str()), ("Кино", "Звезда по имени Солнце"));
         assert!(parse_meta(&json!({ "id": "x", "is_live": true })).is_err());
         assert!(parse_meta(&json!({ "_type": "playlist", "entries": [] })).is_err());
+    }
+
+    #[test]
+    fn channel_from_video_or_channel_page() {
+        let video = json!({ "id": "v", "channel_id": "UC123", "channel": "NoCopyrightSounds" });
+        let c = parse_channel(&video, "https://youtu.be/v").unwrap();
+        assert_eq!((c.channel_id.as_str(), c.name.as_str()), ("UC123", "NoCopyrightSounds"));
+        let page =
+            json!({ "_type": "playlist", "entries": [{ "channel_id": "UC9", "uploader": "StreamBeats" }] });
+        assert_eq!(parse_channel(&page, "x").unwrap().name, "StreamBeats");
+        assert!(parse_channel(&json!({ "id": "x" }), "x").is_err());
     }
 
     #[test]

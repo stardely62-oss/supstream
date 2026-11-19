@@ -6,6 +6,7 @@
 
 pub mod check;
 pub mod filter;
+pub mod library;
 pub mod lyrics;
 pub mod requests;
 pub mod track;
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Semaphore, watch};
 
 pub use track::MusicConfig;
-use track::{Mute, Requester, Status, Track, Via};
+use track::{Mute, Requester, SourceMode, Status, Track, Via};
 
 use crate::app::AppState;
 
@@ -269,6 +270,7 @@ pub fn request(state: &Arc<AppState>, query: &str, requester: Requester) -> Resu
         check: None,
         mutes: Vec::new(),
         approved: false,
+        settled: false,
     };
     music.mutate(|inner| inner.tracks.push(track.clone()));
     spawn_process(state, track.id.clone());
@@ -317,7 +319,7 @@ async fn process(state: &Arc<AppState>, id: &str) -> Result<()> {
     let Some(track) = music.track(id) else { return Ok(()) };
     let cfg = state.store.config().music;
 
-    let meta = music.ytdlp.resolve(&state.http, &track.query).await?;
+    let (meta, local_file) = find_source(state, &cfg, &track.query).await?;
     if let Some(d) = meta.duration
         && d > cfg.max_duration_secs as f64
     {
@@ -338,10 +340,16 @@ async fn process(state: &Arc<AppState>, id: &str) -> Result<()> {
         t.status = Status::Checking;
     });
 
-    // Загрузка и поиск текста параллельно.
+    // Загрузка и поиск текста параллельно. Свою музыку скачивать не нужно.
     let cache = music.cache_dir();
+    let download = async {
+        match &local_file {
+            Some(p) => Ok(p.clone()),
+            None => music.ytdlp.download_audio(&state.http, &meta, &cache).await,
+        }
+    };
     let (audio, lyrics) = tokio::join!(
-        music.ytdlp.download_audio(&state.http, &meta, &cache),
+        download,
         music.lrclib.find(&state.http, &meta.artist, &meta.track_title, meta.duration),
     );
     let audio = audio?;
@@ -369,8 +377,55 @@ async fn process(state: &Arc<AppState>, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Откуда взять трек с учётом режима:
+/// своя папка → (безопасный режим) поиск в разрешённых каналах → (любой режим) весь YouTube.
+async fn find_source(
+    state: &Arc<AppState>,
+    cfg: &MusicConfig,
+    query: &str,
+) -> Result<(track::TrackMeta, Option<PathBuf>)> {
+    let music = &state.music;
+    if let Some(local) = library::find(&cfg.local_dirs, query) {
+        return Ok((local.meta(), Some(local.path)));
+    }
+    if cfg.source_mode == SourceMode::Any {
+        return Ok((music.ytdlp.resolve(&state.http, query).await?, None));
+    }
+
+    let allowed = |m: &track::TrackMeta| {
+        m.channel_id.as_ref().is_some_and(|id| cfg.safe_channels.iter().any(|c| &c.channel_id == id))
+    };
+    if ytdlp::is_url(query) {
+        let meta = music.ytdlp.resolve(&state.http, query).await?;
+        if !allowed(&meta) {
+            bail!(Refused(format!(
+                "безопасный режим: канал «{}» не в списке разрешённых",
+                if meta.channel.is_empty() { "?" } else { &meta.channel }
+            )));
+        }
+        return Ok((meta, None));
+    }
+    if cfg.safe_channels.is_empty() && cfg.local_dirs.is_empty() {
+        bail!(Refused("безопасный режим: стример ещё не добавил разрешённые источники".into()));
+    }
+    for ch in &cfg.safe_channels {
+        match music.ytdlp.search_in_channel(&state.http, &ch.channel_id, query).await {
+            // Проверяем канал ещё раз: поиск YouTube иногда подмешивает чужие видео.
+            Ok(meta) if allowed(&meta) => return Ok((meta, None)),
+            Ok(_) => {}
+            Err(e) => tracing::debug!("поиск в канале {}: {e:#}", ch.name),
+        }
+    }
+    bail!(Refused("безопасный режим: трек не найден в разрешённых источниках".into()))
+}
+
 /// Если ничего не играет и не пауза — запускаем следующий готовый трек.
 pub fn maybe_start(state: &Arc<AppState>) {
+    start_next(state);
+    settle_pending(state);
+}
+
+fn start_next(state: &Arc<AppState>) {
     state.music.mutate(|inner| {
         if inner.player.current.is_some() || inner.player.paused {
             return;
@@ -380,6 +435,62 @@ pub fn maybe_start(state: &Arc<AppState>) {
             inner.player.current = Some(t.id.clone());
             inner.player.position = 0.0;
             inner.player.duration = t.meta.as_ref().and_then(|m| m.duration);
+        }
+    });
+}
+
+/// Награды за баллы: трек заиграл → подтверждаем активацию; отклонён или не скачался →
+/// отменяем, и Twitch возвращает зрителю баллы. Только для награды, созданной приложением.
+fn settle_pending(state: &Arc<AppState>) {
+    let reward_id = state.store.config().music.reward_id;
+    if reward_id.is_empty() {
+        return;
+    }
+    let todo: Vec<(String, String, bool)> = {
+        let inner = state.music.inner.lock().unwrap();
+        inner
+            .tracks
+            .iter()
+            .filter(|t| !t.settled)
+            .filter_map(|t| {
+                let (rid, red) = t.requested_by.redemption.as_ref()?;
+                if *rid != reward_id {
+                    return None;
+                }
+                let fulfilled = match t.status {
+                    Status::Playing | Status::Played | Status::Skipped => true,
+                    Status::Rejected | Status::Failed => false,
+                    _ => return None,
+                };
+                Some((t.id.clone(), red.clone(), fulfilled))
+            })
+            .collect()
+    };
+    if todo.is_empty() {
+        return;
+    }
+    state.music.mutate(|inner| {
+        for t in inner.tracks.iter_mut() {
+            if todo.iter().any(|(id, _, _)| *id == t.id) {
+                t.settled = true;
+            }
+        }
+    });
+    for (_, redemption_id, fulfilled) in todo {
+        spawn_settle(state, reward_id.clone(), redemption_id, fulfilled);
+    }
+}
+
+fn spawn_settle(state: &Arc<AppState>, reward_id: String, redemption_id: String, fulfilled: bool) {
+    let state = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) =
+            crate::twitch::set_redemption_status(&state, &reward_id, &redemption_id, fulfilled).await
+        {
+            tracing::warn!(
+                "Twitch: не удалось {} награду: {e:#}",
+                if fulfilled { "подтвердить" } else { "отменить" }
+            );
         }
     });
 }
@@ -548,6 +659,15 @@ pub fn track_command(state: &Arc<AppState>, id: &str, cmd: TrackCommand) -> Resu
             });
         }
         TrackCommand::Remove => {
+            let reward_id = state.store.config().music.reward_id;
+            if let Some((rid, red)) = &track.requested_by.redemption
+                && !track.settled
+                && *rid == reward_id
+                && !reward_id.is_empty()
+            {
+                // Убрали до эфира — возвращаем баллы; во время эфира — засчитываем.
+                spawn_settle(state, rid.clone(), red.clone(), track.status == Status::Playing);
+            }
             music.mutate(|inner| {
                 if inner.player.current.as_deref() == Some(id) {
                     finish_current(inner, Status::Skipped);

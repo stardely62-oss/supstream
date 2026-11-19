@@ -238,6 +238,93 @@ pub async fn send_chat(state: &Arc<AppState>, message: &str) -> Result<()> {
     Ok(())
 }
 
+async fn helix_error(resp: reqwest::Response) -> anyhow::Error {
+    let status = resp.status();
+    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+    let msg = body.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+    if status == reqwest::StatusCode::FORBIDDEN && msg.to_lowercase().contains("affiliate") {
+        return anyhow::anyhow!("награды за баллы доступны только компаньонам и партнёрам Twitch");
+    }
+    anyhow::anyhow!("Twitch: {status} {msg}")
+}
+
+/// Создать (или обновить, если `existing_id` ещё жив) награду за баллы.
+/// Только у наград, созданных нашим приложением, можно менять статус активаций (вернуть баллы).
+pub async fn upsert_reward(
+    state: &Arc<AppState>,
+    existing_id: &str,
+    title: &str,
+    cost: u32,
+    prompt: &str,
+) -> Result<String> {
+    let Some(t) = state.store.secrets().twitch else {
+        bail!(NotConfigured("Войдите в Twitch".into()));
+    };
+    let body = serde_json::json!({
+        "title": title,
+        "cost": cost.max(1),
+        "prompt": prompt,
+        "is_user_input_required": true,
+        "is_enabled": true,
+    });
+    if !existing_id.is_empty() {
+        let path = format!("/channel_points/custom_rewards?broadcaster_id={}&id={}", t.user_id, existing_id);
+        let resp = helix(state, reqwest::Method::PATCH, &path, Some(body.clone())).await?;
+        if resp.status().is_success() {
+            return Ok(existing_id.to_string());
+        }
+        if resp.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(helix_error(resp).await);
+        }
+        // Награду удалили вручную в панели Twitch — создаём заново.
+    }
+    let path = format!("/channel_points/custom_rewards?broadcaster_id={}", t.user_id);
+    let resp = helix(state, reqwest::Method::POST, &path, Some(body)).await?;
+    if !resp.status().is_success() {
+        return Err(helix_error(resp).await);
+    }
+    let v: serde_json::Value = resp.json().await?;
+    v.pointer("/data/0/id")
+        .and_then(|x| x.as_str())
+        .map(str::to_string)
+        .context("Twitch не вернул id награды")
+}
+
+pub async fn delete_reward(state: &Arc<AppState>, id: &str) -> Result<()> {
+    let Some(t) = state.store.secrets().twitch else {
+        bail!(NotConfigured("Войдите в Twitch".into()));
+    };
+    let path = format!("/channel_points/custom_rewards?broadcaster_id={}&id={}", t.user_id, id);
+    let resp = helix(state, reqwest::Method::DELETE, &path, None).await?;
+    if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    Err(helix_error(resp).await)
+}
+
+/// Подтвердить активацию (`fulfilled`) или отменить её — тогда Twitch вернёт зрителю баллы.
+pub async fn set_redemption_status(
+    state: &Arc<AppState>,
+    reward_id: &str,
+    redemption_id: &str,
+    fulfilled: bool,
+) -> Result<()> {
+    let Some(t) = state.store.secrets().twitch else {
+        bail!(NotConfigured("Войдите в Twitch".into()));
+    };
+    let path = format!(
+        "/channel_points/custom_rewards/redemptions?broadcaster_id={}&reward_id={}&id={}",
+        t.user_id, reward_id, redemption_id
+    );
+    let status = if fulfilled { "FULFILLED" } else { "CANCELED" };
+    let resp =
+        helix(state, reqwest::Method::PATCH, &path, Some(serde_json::json!({ "status": status }))).await?;
+    if !resp.status().is_success() {
+        return Err(helix_error(resp).await);
+    }
+    Ok(())
+}
+
 pub async fn logout(state: &Arc<AppState>) -> Result<()> {
     if let Some(task) = state.twitch.login_task.lock().unwrap().take() {
         task.abort();

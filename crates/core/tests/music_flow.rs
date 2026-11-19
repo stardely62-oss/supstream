@@ -338,7 +338,103 @@ async fn music_request_check_and_playback() {
     assert_eq!(donated["query"], "https://youtu.be/donated");
     assert!(track_by_query(&t, "cheap song").is_none(), "донат меньше порога не заказывает");
 
-    // 7. После перезапуска очередь на месте.
+    // 7. Безопасный режим: только разрешённые каналы и своя папка.
+    let put_cfg = |cfg: Value| {
+        let app = &app;
+        async move {
+            let r = app
+                .http
+                .put(format!("{}/music/settings", app.base))
+                .bearer_auth(&app.token)
+                .json(&cfg)
+                .send()
+                .await
+                .unwrap();
+            assert!(r.status().is_success());
+        }
+    };
+    let mut cfg = app.get("/music/settings").await;
+    cfg["source_mode"] = json!("safe");
+    put_cfg(cfg.clone()).await;
+
+    let request_and_wait = |q: &'static str| {
+        let app = &app;
+        async move {
+            let (code, t) = app.post("/music/request", json!({ "query": q })).await;
+            assert_eq!(code, StatusCode::OK, "{q}: {t}");
+            t["id"].as_str().unwrap().to_string()
+        }
+    };
+    let settled = |m: &Value, id: &str| {
+        all_tracks(m)
+            .into_iter()
+            .find(|t| t["id"] == id && !matches!(t["status"].as_str(), Some("resolving" | "checking")))
+    };
+
+    let id = request_and_wait("some hit").await;
+    let m = wait_music(&mut panel, "нет источников", |m| settled(m, &id).is_some()).await;
+    let t = settled(&m, &id).unwrap();
+    assert_eq!(t["status"], "rejected");
+    assert!(t["error"].as_str().unwrap().contains("не добавил разрешённые источники"), "{t}");
+
+    let (code, cfg_after) =
+        app.post("/music/safe-channels", json!({ "url": "https://www.youtube.com/@safebeats" })).await;
+    assert_eq!(code, StatusCode::OK, "{cfg_after}");
+    assert_eq!(cfg_after["safe_channels"][0]["channel_id"], "UCSAFE");
+    assert_eq!(cfg_after["safe_channels"][0]["name"], "Safe Beats");
+    // Повторное добавление не дублирует канал.
+    let (_, again) =
+        app.post("/music/safe-channels", json!({ "url": "https://www.youtube.com/@safebeats" })).await;
+    assert_eq!(again["safe_channels"].as_array().unwrap().len(), 1);
+
+    let found = request_and_wait("chill vibes").await;
+    let major = request_and_wait("https://www.youtube.com/watch?v=major1").await;
+    let safe_url = request_and_wait("https://www.youtube.com/watch?v=safe2").await;
+    let missing = request_and_wait("missing thing").await;
+    let m = wait_music(&mut panel, "безопасный режим", |m| {
+        [&found, &major, &safe_url, &missing].iter().all(|id| settled(m, id).is_some())
+    })
+    .await;
+    let t = settled(&m, &found).unwrap();
+    assert_eq!(t["meta"]["channel_id"], "UCSAFE", "поиск идёт внутри разрешённого канала: {t}");
+    assert!(!matches!(t["status"].as_str(), Some("rejected" | "failed")), "{t}");
+    let t = settled(&m, &major).unwrap();
+    assert_eq!(t["status"], "rejected");
+    assert!(t["error"].as_str().unwrap().contains("Major Label"), "{t}");
+    assert!(!matches!(settled(&m, &safe_url).unwrap()["status"].as_str(), Some("rejected" | "failed")));
+    let t = settled(&m, &missing).unwrap();
+    assert!(t["error"].as_str().unwrap().contains("не найден в разрешённых"), "{t}");
+
+    // Своя папка: трек берётся с диска, не скачивается, и плеер может его получить.
+    let lib = dir.join("my-music");
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::write(lib.join("Local Artist - Own Song.mp3"), b"OWNAUDIO").unwrap();
+    let mut cfg = app.get("/music/settings").await;
+    cfg["local_dirs"] = json!([lib.display().to_string()]);
+    put_cfg(cfg).await;
+    let own = request_and_wait("own song").await;
+    let m = wait_music(&mut panel, "своя музыка", |m| settled(m, &own).is_some()).await;
+    let t = settled(&m, &own).unwrap();
+    assert_eq!(t["meta"]["local"], true, "{t}");
+    assert_eq!(t["meta"]["artist"], "Local Artist");
+    let bytes = app
+        .http
+        .get(format!("{}/media/{own}?token={}", app.base, app.token))
+        .send()
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"OWNAUDIO");
+
+    // Награда меняется только своим адресом — сохранение формы её не затирает.
+    let mut cfg = app.get("/music/settings").await;
+    cfg["reward_id"] = json!("hacked");
+    put_cfg(cfg).await;
+    assert_eq!(app.get("/music/settings").await["reward_id"], "");
+
+    // 8. После перезапуска очередь на месте.
     let queued_before = m["queue"].as_array().unwrap().len();
     drop(panel);
     running.shutdown();

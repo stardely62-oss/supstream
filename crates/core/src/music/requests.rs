@@ -102,8 +102,9 @@ fn handle(state: &Arc<AppState>, ev: &Event) {
             )
         }
         EventKind::Redemption(r)
-            if !cfg.reward_title.trim().is_empty()
-                && r.reward_title.trim().to_lowercase() == cfg.reward_title.trim().to_lowercase() =>
+            if (!cfg.reward_id.is_empty() && r.reward_id == cfg.reward_id)
+                || (!cfg.reward_title.trim().is_empty()
+                    && r.reward_title.trim().to_lowercase() == cfg.reward_title.trim().to_lowercase()) =>
         {
             let Some(q) = r.user_input.as_deref().filter(|s| !s.trim().is_empty()) else { return };
             (
@@ -112,7 +113,8 @@ fn handle(state: &Arc<AppState>, ev: &Event) {
                     name: r.user_name.clone(),
                     via: Via::Reward,
                     user_id: Some(r.user_id.clone()),
-                    redemption: Some((r.reward_id.clone(), r.redemption_id.clone())),
+                    // Тестовые события не трогают настоящие награды Twitch.
+                    redemption: (!ev.test).then(|| (r.reward_id.clone(), r.redemption_id.clone())),
                     amount: Some(format!("{} баллов", r.cost)),
                 },
             )

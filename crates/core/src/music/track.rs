@@ -28,6 +28,27 @@ pub enum ChatRole {
     Moderator,
 }
 
+/// Откуда можно брать музыку.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceMode {
+    /// Любой трек. Риск жалоб правообладателей (DMCA) — на совести стримера.
+    #[default]
+    Any,
+    /// Только разрешённые каналы и своя папка с музыкой.
+    Safe,
+}
+
+/// Разрешённый в безопасном режиме канал (например, StreamBeats или NoCopyrightSounds).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SafeChannel {
+    /// ID канала YouTube (UC…) — уникален, в отличие от названия.
+    pub channel_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MusicConfig {
@@ -53,6 +74,13 @@ pub struct MusicConfig {
     pub volume: f64,
     pub custom_rules: Vec<Rule>,
     pub allow_words: Vec<String>,
+    pub source_mode: SourceMode,
+    pub safe_channels: Vec<SafeChannel>,
+    /// Папки со своей музыкой (на которую есть права). Ищутся первыми в любом режиме.
+    pub local_dirs: Vec<String>,
+    /// Награда, созданная приложением: только для неё Twitch даёт вернуть баллы.
+    pub reward_id: String,
+    pub reward_cost: u32,
 }
 
 impl Default for MusicConfig {
@@ -74,6 +102,11 @@ impl Default for MusicConfig {
             volume: 0.5,
             custom_rules: Vec::new(),
             allow_words: Vec::new(),
+            source_mode: SourceMode::Any,
+            safe_channels: Vec::new(),
+            local_dirs: Vec::new(),
+            reward_id: String::new(),
+            reward_cost: 1000,
         }
     }
 }
@@ -139,6 +172,13 @@ pub struct TrackMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail: Option<String>,
     pub extractor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub channel: String,
+    /// Трек из своей папки, а не из интернета.
+    #[serde(default)]
+    pub local: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -207,6 +247,9 @@ pub struct Track {
     /// Стример вручную одобрил трек.
     #[serde(default)]
     pub approved: bool,
+    /// Активация награды уже подтверждена или отменена на Twitch.
+    #[serde(default)]
+    pub settled: bool,
 }
 
 impl Track {

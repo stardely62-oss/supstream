@@ -106,6 +106,9 @@ export interface Track {
     duration?: number;
     thumbnail?: string;
     extractor: string;
+    channel_id?: string;
+    channel: string;
+    local: boolean;
   };
   check?: {
     lyrics?: { source: string; synced: boolean; instrumental: boolean; matched_artist: string; matched_title: string };
@@ -150,6 +153,11 @@ export interface MusicSettings {
   volume: number;
   custom_rules: { pattern: string; category: Category; kind: "exact" | "prefix" | "contains" | "root" }[];
   allow_words: string[];
+  source_mode: "any" | "safe";
+  safe_channels: { channel_id: string; name: string; url: string }[];
+  local_dirs: string[];
+  reward_id: string;
+  reward_cost: number;
 }
 
 const TOKEN_KEY = "supstream.token";
