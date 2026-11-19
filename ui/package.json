@@ -14,5 +14,9 @@
     "svelte-check": "^4.3.0",
     "typescript": "~5.9.0",
     "vite": "^7.1.0"
+  },
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
   }
 }
